@@ -41,7 +41,8 @@ from spikeA.Spike_waveform import Spike_waveform
 from spikeA.Spike_waveform import Spike_waveform
 
 from concurrent.futures import ProcessPoolExecutor
-save_directory = '/home/maryam/repo/autopi_inter/autopi_interneuron_decoding/notebooks/Shuffled_values/'
+save_directory ='/home/kevin/repo/autopi_inter_new/autopi_interneuron_decoding/notebooks/Shuffled_values/'
+
 os.makedirs(save_directory, exist_ok=True)
 
 class NeuralDataset(torch.utils.data.Dataset):
@@ -220,7 +221,7 @@ def get_test_training_datas_oneSession(sSes, ses, cells,interName, ctype= 'fs', 
               "batch_size" :64, #64,
               "num_epochs": 100}
 
-    print(datetime.datetime.now(), config)
+    #print(datetime.datetime.now(), config)
     #print(datetime.now(), config)
     # 4. Create train and test datasets
     train_dataset = NeuralDataset(
@@ -440,72 +441,6 @@ def get_labels_and_outputs_mse(model, test_data_loader, device):
     return mse, outputs, labels
 
 
-def run_and_evaluate_model(sSes, ses, cells,interName, ctype='fs', sigma_ifr=5, shuffle=True):
-    
-    ## Get the test and train Dataset for each shuffle
-    train_dataset, test_dataset, train_loader, test_loader, _, config = get_test_training_datas_oneSession(
-        sSes, ses, cells,interName, ctype=ctype, sigma_ifr=sigma_ifr, shuffle=shuffle
-    )
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = LSTM(config["n_cells"], config["hidden_size"], config["num_layers"], config["num_outputs"], config["seq_length"], device=device).to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=config["learning_rate"])
-    loss_fn = torch.nn.MSELoss()
-
-    # Train the model
-    df, _ = training_loop(
-        n_epochs=config["num_epochs"], optimizer=optimizer, model=model,
-        loss_fn=loss_fn, train_data_loader=train_loader, test_data_loader=test_loader,
-        config=config, device=device, verbose=False
-    )
-
-    # Get labels and predictions
-    mse_test, outputs_test, labels_test = get_labels_and_outputs_mse(model, test_loader, device)
-    mse_train, outputs_train, labels_train = get_labels_and_outputs_mse(model, train_loader, device)
-
-    # Calculate angles
-    angles = {}
-    
-    if shuffle == True: 
-        
-        for split, labels, outputs in zip(['train', 'test'], [labels_train, labels_test], [outputs_train, outputs_test]):
-            angles[f'{split}_shuffled'] = np.arctan2(labels[:, 0], labels[:, 1])
-            angles[f'{split}_pred_shuffled'] = np.arctan2(outputs[:, 0], outputs[:, 1])
-
-        # Calculate correlations
-        metrics = {
-            'r_train': pearsonr(angles['train_shuffled'], angles['train_pred_shuffled'])[0],
-            'circr_train': circcorrcoef(angles['train_shuffled'], angles['train_pred_shuffled']),
-            'r_test': pearsonr(angles['test_shuffled'], angles['test_pred_shuffled'])[0],
-            'circr_test': circcorrcoef(angles['test_shuffled'], angles['test_pred_shuffled']),
-            'df': df,
-        }
-    else:
-        for split, labels, outputs in zip(['train', 'test'], [labels_train, labels_test], [outputs_train, outputs_test]):
-            angles[f'{split}'] = np.arctan2(labels[:, 0], labels[:, 1])
-            angles[f'{split}_pred'] = np.arctan2(outputs[:, 0], outputs[:, 1])
-
-        # Calculate correlations
-        metrics = {
-            'r_train': pearsonr(angles['train'], angles['train_pred'])[0],
-            'circr_train': circcorrcoef(angles['train'], angles['train_pred']),
-            'r_test': pearsonr(angles['test'], angles['test_pred'])[0],
-            'circr_test': circcorrcoef(angles['test'], angles['test_pred']),
-            'df': df,
-        }
-
-    return {**angles, **metrics}
-
-def Get_shuffle_values_one_session(sSes, ses, cells,interName, iteration= 500): 
-    results = []
-    for _ in tqdm(range(iteration)):
-        angles_and_metrics = run_and_evaluate_model(sSes, ses, cells,interName, ctype='fs', sigma_ifr=5, shuffle=True)
-        results.append(angles_and_metrics)
-
-    # Convert results to a DataFrame
-    df_sSes = pd.DataFrame(results)
-      
-    return df_sSes
 
 def plot_shuffled_rvalues_oneSession(gs,df_sSes, Angle_test, Angle_test_pred ,iteration= 500 ):
 
@@ -614,48 +549,6 @@ def load_pose_around_lever_for_modeling(ses,sSes, cells,interName= 'all_light' ,
 
     return sSes.ap, cg
 
-
-
-
-# Define intervals to process
-interNames = ['atLever_light', 'atLever_dark']
-
-interNames = ['atLever_light']
-   
-def process_session_intervals_withShuffles(sSes, ses, interNames, cells, iteration=500):
-    # Check if there are more than 1 FS cells in the session
-    FS_count = cells[(cells.interneuron) & (cells.mrate_RF1 > 10) & (cells.session == sSes.name)].shape[0]
-    
-    if FS_count >= 10:
-        for interName in interNames:
-            # Define the file path
-            filename = f"{sSes.name}_{interName}_shuffled_values.pkl"
-            file_path = os.path.join(save_directory, filename)
-            
-            # Check if the file already exists
-            if os.path.exists(file_path):
-                print(f"File {filename} already exists. Skipping.")
-                continue  # Skip to the next interval if file exists
-            
-            # Process each interval and save the DataFrame
-            df_sSes = Get_shuffle_values_one_session(sSes, ses,cells, interName, iteration=iteration)
-            df_sSes.to_pickle(file_path)
-            print(f"Saved data for {filename} at {file_path}")
-            del df_sSes
-            gc.collect()
-            
-# Define the wrapper function to accept session pairs
-def process_session_wrapper(session_pair, interNames, cells, iteration):
-    sSes, ses = session_pair  # Unpack the session pair
-    #print(sSes)
-    process_session_intervals_withShuffles(sSes, ses, interNames, cells, iteration=iteration)
-    pass
-
-def process_session_wrapper(session_pair, interNames, cells, iteration):
-    sSes, ses = session_pair  # Unpack the session pair
-    #print(sSes)
-    process_session_intervals_withShuffles(sSes, ses, interNames, cells, iteration=iteration)
-    pass
 
 def toLeverReferenceFrame(ses,sSes,maxDistance=30, rotationType="none",
                          invalidateSmallBridgeAngle=False,invalidateMaxAngle=np.pi/12):
@@ -789,4 +682,89 @@ def getLeverPosition(ses):
     leverOri = np.arctan2(ovY,ovX)
     
     return leverX,leverY,leverOri  
+
+interNames = ['atLever_light']
+
+
+def run_and_evaluate_model_shuffle(sSes, ses, cells,interName, ctype='fs', sigma_ifr=5, shuffle=True):
     
+    ## Get the test and train Dataset for each shuffle
+    train_dataset, test_dataset, train_loader, test_loader, _, config = get_test_training_datas_oneSession(
+        sSes, ses, cells,interName, ctype=ctype, sigma_ifr=sigma_ifr, shuffle=shuffle
+    )
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = LSTM(config["n_cells"], config["hidden_size"], config["num_layers"], config["num_outputs"], config["seq_length"], device=device).to(device)
+    optimizer = torch.optim.SGD(model.parameters(), lr=config["learning_rate"])
+    loss_fn = torch.nn.MSELoss()
+
+    # Train the model
+    df, _ = training_loop(
+        n_epochs=config["num_epochs"], optimizer=optimizer, model=model,
+        loss_fn=loss_fn, train_data_loader=train_loader, test_data_loader=test_loader,
+        config=config, device=device, verbose=False
+    )
+
+    # Get labels and predictions
+    mse_test, outputs_test, labels_test = get_labels_and_outputs_mse(model, test_loader, device)
+    mse_train, outputs_train, labels_train = get_labels_and_outputs_mse(model, train_loader, device)
+
+    # Calculate angles
+    angles = {}
+    
+    for split, labels, outputs in zip(['train', 'test'], [labels_train, labels_test], [outputs_train, outputs_test]):
+        angles[f'{split}_shuffled'] = np.arctan2(labels[:, 0], labels[:, 1])
+        angles[f'{split}_pred_shuffled'] = np.arctan2(outputs[:, 0], outputs[:, 1])
+
+    # Calculate correlations
+    metrics = {
+        'r_train': pearsonr(angles['train_shuffled'], angles['train_pred_shuffled'])[0],
+        'circr_train': circcorrcoef(angles['train_shuffled'], angles['train_pred_shuffled']),
+        'r_test': pearsonr(angles['test_shuffled'], angles['test_pred_shuffled'])[0],
+        'circr_test': circcorrcoef(angles['test_shuffled'], angles['test_pred_shuffled']),
+        'df': df,
+    }
+
+
+    return {**angles, **metrics}
+
+def Get_shuffle_values_one_session(sSes, ses, cells,interName, iteration= 500): 
+    results = []
+    for _ in tqdm(range(iteration)):
+        angles_and_metrics = run_and_evaluate_model_shuffle(sSes, ses, cells,interName, ctype='fs', sigma_ifr=5, shuffle=True)
+        results.append(angles_and_metrics)
+
+    # Convert results to a DataFrame
+    df_sSes = pd.DataFrame(results)
+      
+    return df_sSes
+    
+def process_session_intervals_withShuffles(sSes, ses, interNames, cells, iteration=500):
+    # Check if there are more than 1 FS cells in the session
+    FS_count = cells[(cells.interneuron) & (cells.mrate_RF1 > 10) & (cells.session == sSes.name)].shape[0]
+    
+    if FS_count >= 7 :
+        for interName in interNames:
+            # Define the file path
+            filename = f"{sSes.name}_{interName}_shuffled_values.pkl"
+            file_path = os.path.join(save_directory, filename)
+            
+            # Check if the file already exists
+            if os.path.exists(file_path):
+                print(f"File {filename} already exists. Skipping.")
+                continue  # Skip to the next interval if file exists
+            
+            # Process each interval and save the DataFrame
+            print(sSes.name)
+            df_sSes = Get_shuffle_values_one_session(sSes, ses,cells, interName, iteration=iteration)
+            df_sSes.to_pickle(file_path)
+            print(f"Saved data for {filename} at {file_path}")
+            del df_sSes
+            gc.collect()
+            
+
+def process_session_wrapper(session_pair, interNames, cells, iteration):
+    sSes, ses = session_pair  # Unpack the session pair
+    #print(sSes)
+    process_session_intervals_withShuffles(sSes, ses, interNames, cells, iteration=iteration)
+    pass
